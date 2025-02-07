@@ -1,7 +1,3 @@
-;; PROG NOTES
-;; am calibrating how many neuts/macs to recruit now that world is much larger
-;; *** NEED TO CONSIDER WHY EGF PEAKSSO LATE. WHAT ELSE RELEASESE EGF
-
 breed [suprabasal-ktns suprabasal-ktn]
 breed [basal-ktns basal-ktn]
 breed [ecms ecm]
@@ -13,20 +9,19 @@ breed [macrophages macrophage]
 breed [mast-cells mast-cell]
 
 ;; Priority is used to determine which cells can displace other cells. Cells of higher priority (lower value) can displace cells of lower priority, but not vice-versa
-turtles-own [tick-stagger]
-suprabasal-ktns-own [priority injury-level]
-basal-ktns-own [priority vert-mitosis-rate hor-mitosis-rate inert connections] ;mitotic rate defined as 'rate' divisions per 100 ticks
-capillaries-own [priority permeability blood-flow-rate wounded-counter]
-fibroblasts-own [priority migration-rate ecm-production-rate injury-level]
-ecms-own [priority]
-platelets-own [priority time-alive]
-neutrophils-own [priority time-in-cap location lifespan time-alive]
-macrophages-own [priority time-in-cap location lifespan time-alive]
-mast-cells-own [priority]
+turtles-own [tick-stagger priority]
+suprabasal-ktns-own [ injury-level]
+basal-ktns-own [ vert-mitosis-rate hor-mitosis-rate ] ;mitotic rate defined as 'rate' divisions per 100 ticks
+capillaries-own [ permeability blood-flow-rate ]
+fibroblasts-own [ migration-rate ecm-production-rate injury-level]
+ecms-own []
+platelets-own [ time-alive]
+neutrophils-own [ time-in-cap location lifespan time-alive]
+macrophages-own [ time-in-cap location lifespan time-alive]
 
 patches-own [ patch-type egf-level pdgf-level il1-level fgf-level tnf-a-level il6-level vegf-level tgf-b-level bradykinin-level txa2-level]
 
-globals [ time-of-burn basal-layer-ycor rate-of-surface-abrasion base-vert-mitosis-rate base-hor-mitosis-rate base-cap-blood-flow-rate base-cap-permeability]
+globals [ max-recursion-depth time-of-burn basal-layer-ycor rate-of-surface-abrasion]
 
 
 
@@ -39,18 +34,14 @@ to setup
   resize-world 0 ((2000 / unit-size) - 1) 0 ((3000 / unit-size) - 1)
   set-patch-size unit-size * 3 / 12
 
-  ;set base-vert-mitosis-rate 0.17 ;; mitoses # per 60 ticks (per hour), equivalent to 1 mitosis every 6 hours
-  set base-vert-mitosis-rate 0.1
-  set base-hor-mitosis-rate 0
-  set rate-of-surface-abrasion 0.08 ;;'rate' abrasions per 60 ticks (per hour), equivalent to 1 time per 12 hours
+  set max-recursion-depth 20
 
-  set base-cap-blood-flow-rate 1.2 ;; # of times inflam. cells can pass through per 60 ticks (per hour)
-  set base-cap-permeability 1 ;;defined as % likelihood a cell can extravasate each tick
+  set rate-of-surface-abrasion 0.08 ;;'rate' abrasions per 60 ticks (per hour), equivalent to 1 time per 12 hours
 
   set basal-layer-ycor round(max-pycor * 0.85)
   ask patches with [pycor = basal-layer-ycor] [
     sprout-basal-ktns 1 [
-      set priority -1 set shape "square" set vert-mitosis-rate base-vert-mitosis-rate set hor-mitosis-rate base-hor-mitosis-rate
+      set priority -1 set shape "square"
       ;move-to one-of patches with [pycor = 350 and not any? other turtles-here]
       set tick-stagger random 360  ;; tick-stagger used so not all basal cells mitose at the same exact time
       set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)
@@ -64,13 +55,15 @@ to setup
     sprout-fibroblasts 1 [set migration-rate 0 set ecm-production-rate 0 set priority -2  set shape "square" set color 107]]]
   ask patches with [pycor < basal-layer-ycor - 1] [if not (any? capillaries in-radius 8) and not any? turtles-here [
     sprout-capillaries 1 [set tick-stagger random 360 set priority -2  set shape "circle" set color red
-      set permeability base-cap-permeability set blood-flow-rate base-cap-blood-flow-rate set size blood-flow-rate + blood-flow-rate / 60]]]
+  ]]]
 
   ask patches with [pycor < basal-layer-ycor] [ sprout-ecms 1 [set priority 0 set shape "square" set color 3]]
 
   create-hair-follicles
 
   reset-ticks
+
+  go ;; setup calls go once so that all the base turtle settings can be initialized by the respective turtle functions in go. necessary so base state of model can be seen just with setup alone
 end
 
 to create-hair-follicles
@@ -82,7 +75,7 @@ to create-hair-follicles
   ask turtles with [pxcor >= foll1-pos - 7 and pxcor < foll1-pos + 7 and pycor > 0.1 * max-pycor and pycor < 0.1 * max-pycor + 15] [die] ;; for the bulb
   ask turtles with [pxcor >= foll2-pos - 7 and pxcor < foll2-pos + 7 and pycor > 0.1 * max-pycor and pycor < 0.1 * max-pycor + 15] [die] ;; for the bulb 2
   ask ecms with [any? neighbors with [not any? turtles-here]] [ ask neighbors with [not any? turtles-here] [ sprout-basal-ktns 1 [
-    set priority -1 set shape "square" set vert-mitosis-rate base-vert-mitosis-rate set hor-mitosis-rate base-hor-mitosis-rate
+    set priority -1 set shape "square"
     set tick-stagger random 360  ;; tick-stagger used so not all basal cells mitose at the same exact time
     set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)
   ] ] ]
@@ -129,23 +122,6 @@ to go
 
 end
 
-to wound     ;;called by the interface button "wound", creates a wound with center at xcor 'wound-center', depth of 'wound-depth', and width of 'wound-width'
-  let wound-center-x 50
-  let wound-depth 20
-  let wound-width 40
-  ask turtles-on patches with [(pycor > (35 - wound-depth)) and (pxcor > (wound-center-x - wound-width / 2)) and (pxcor < (wound-center-x + wound-width / 2))] [ die]
-  ask basal-ktns-on patches with [ (pycor > (35 - wound-depth)) and (pxcor > (wound-center-x - wound-width / 2 - 4)) and (pxcor < (wound-center-x + wound-width / 2) + 4) ] [
-    set vert-mitosis-rate 0 set hor-mitosis-rate 0 set inert true
-  ]
-  ask suprabasal-ktns-on patches with [ (pycor > (35 - wound-depth)) and (pxcor > (wound-center-x - wound-width / 2 - 4)) and (pxcor < (wound-center-x + wound-width / 2) + 4) ] [
-    set injury-level 1 set color brown - 3
-  ]
-  ask capillaries with [(pxcor < 71 and pxcor > 29) and pycor > 14] [ set wounded-counter 1]
-
-  ;ask turtles-on patches with [(pycor > (35 - wound-depth)) and (pxcor > (25)) and (pxcor < (40))] [ die]
-  ;ask turtles-on patches with [(pycor > (35 - wound-depth)) and (pxcor > (60)) and (pxcor < (70))] [ die]
-  ;ask turtles-on patches with [((pycor < 17) and pycor > 13 ) and pxcor > (20) and pxcor < (50)] [ die]
-end
 
 to burn
 
@@ -155,7 +131,7 @@ to burn
   let burn-bottom basal-layer-ycor + 10 - burn-depth
   ;let burn-depth 50 ;; represents 50 patch depth, which is 1,000 microns, or 1mm burn depth. partial thickness
   ask turtles with [ycor > burn-bottom] [die]
-  ask patches with [pycor > burn-bottom and pycor < burn-bottom + round (0.2 * max-pycor)] [sprout-platelets 1 [ set color 13 set tick-stagger random 5760]]
+  ask patches with [pycor > burn-bottom and pycor < burn-bottom + round (0.3 * max-pycor)] [sprout-platelets 1 [ set color 13 set tick-stagger random 5760 set priority 3]]
   ;ask patches with [pycor > burn-bottom and pycor < burn-bottom + round (0.2 * max-pycor)] [set platelet-time-remaining 7200 + random 2880 set pcolor 13]
   ;set platelet-patches patches with [platelet-time-remaining > 0 ]
 
@@ -180,7 +156,7 @@ to undergo-angiogenesis
       ;if any? ecms-here [
     let chance-of-angiogenesis 1 + random 100
     if chance-of-angiogenesis < vegf-level and not (any? capillaries in-radius 8) and not (any? fibroblasts-here) [ ;;originally used in radius 5
-      sprout-capillaries 1 [ set tick-stagger random 360 set priority -2  set shape "circle" set permeability base-cap-permeability set blood-flow-rate base-cap-blood-flow-rate set size 1.3 + blood-flow-rate / 60]
+      sprout-capillaries 1 [ set tick-stagger random 360 set priority -2  set shape "circle"]
       ;ask ecms-here [die]
       ]
     ;]
@@ -190,50 +166,36 @@ to undergo-angiogenesis
 end
 
 to capillary-function
+
+  let base-cap-blood-flow-rate 1.2 ;; # of times inflam. cells can pass through per 60 ticks (per hour)
+  let base-cap-permeability 1 ;;defined as % likelihood a cell can extravasate each tick
+
   ;eventually implement blod flow rate below for zone of hyperemia
-  ;set blood-flow-rate base-cap-blood-flow-rate + "some factor that influences blood flow" * "modifier"
   set blood-flow-rate max (list 0 (base-cap-blood-flow-rate - txa2-level * 1000))
   set size max (list 0.5 blood-flow-rate ) ;; to visualize flow rate
 
   ;; permeability defined as % chance a neutrophil can extravasate into surrounding ecm each tick
   set permeability min (list 25 (base-cap-permeability + round (vegf-level / 1)))  ;;make max permeaibliyt 25%, otherwise way too many cells in the system
-
   set color 15 + (4 * permeability / 50)
 
-  if wounded-counter > 0 and any? neighbors4 with [not any? turtles-here or not any? turtles-here with [priority < 2]] [
 
-    ;set color pink
-    foreach n-values 2000 [1] [     ;; foreach loop used to spawns 500 platelets per tick using the below algorithm. 500 was chosen to fill wound bed with platelets within 1 minutes (60 ticks)
-      let curr-priority priority
-      let random-neighbor one-of neighbors with [not any? turtles-here]
-      if random-neighbor = nobody [ set random-neighbor one-of neighbors with [not any? turtles-here with [priority < 3]] ]
-      if not (random-neighbor = nobody) [
-        if any? turtles-on random-neighbor [
-          let curr-x xcor
-          let curr-y ycor
-          ask turtles-on random-neighbor [displace-randomly curr-x curr-y]
-        ]
-        if not any? turtles-on random-neighbor [ hatch-platelets 1 [set priority 3  set shape "circle" set color 12 move-to random-neighbor] ]
-      ]
-    ]
-    set wounded-counter wounded-counter + 1
-    if wounded-counter > 1 [ set wounded-counter 0 set color red ]    ;; capillary can be wounded for max 1 tick, or 1 minute. can increase this if needing longer bleed times
-  ]
-
-  let num-neuts-to-hatch 0 + min (list 4 round (pdgf-level  * 10000 )) + min (list 0.6 (il6-level * 100))  ; changes # of neutrophilic recruitment based off of pdgf-level
-  let num-macs-to-hatch 0 + min (list 1 round (pdgf-level * 10000 )) + min (list 0.15 (il6-level * 100)) ; changes # of macrophage recuritmnet based off of pdgf-level
+  let num-neuts-to-hatch 0 + min (list 6 round (pdgf-level  * 10000 )) + min (list 0.6 (il6-level * 100))  ; changes # of neutrophilic recruitment based off of pdgf-level
+  let num-macs-to-hatch 0 + min (list 1.5 round (pdgf-level * 10000 )) + min (list 0.15 (il6-level * 100)) ; changes # of macrophage recuritmnet based off of pdgf-level
 
   let net-rate-neuts blood-flow-rate * num-neuts-to-hatch
   let net-rate-macs blood-flow-rate * num-macs-to-hatch
 
+
+
+  ;;;ORIGINALLY NEUT MAC PRIORITY IS -2, but will try 0
   if net-rate-neuts > 0 [
     if ((ticks + tick-stagger) mod ceiling (60 / net-rate-neuts)) = 0  [
-      hatch-neutrophils 1[set lifespan (7200 + random 500) set priority -2  set shape "star" set size 0.7 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
+      hatch-neutrophils 1[set lifespan (7200 + random 500) set priority 0  set shape "star" set size 0.7 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
     ]
   ]
   if net-rate-macs > 0 [
      if ((ticks + tick-stagger) mod ceiling (60 / net-rate-macs)) = 0  [
-      hatch-macrophages 1 [set lifespan (7200 + random 500) set priority -2  set shape "circle" set size 0.5 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
+      hatch-macrophages 1 [set lifespan (7200 + random 500) set priority 0 set shape "circle" set size 0.5 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
     ]
   ]
 
@@ -278,9 +240,8 @@ to neutrophil-function
     let cap one-of capillaries-here
     if not (cap = nobody) [
       if random 100 < [permeability] of cap [   ;; converts permeability into the actual percent likelihood
-        set location "wound-bed"
-        let move one-of neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
-        if not (move = nobody) [ move-to move]
+        let new-location one-of neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
+        if not (new-location = nobody) [ move-to new-location set location "wound-bed"]
       ]
     ]
     set time-in-cap time-in-cap + 1
@@ -290,6 +251,7 @@ to neutrophil-function
     set il6-level il6-level + 0.15
     if (ticks + tick-stagger) mod 10 = 0 [   ;; neutrophil moves every 2 hour
 
+      ;; TESTING DIFFERENT WAY OF CHEMOTACTIC MOVEMENT WITH MULTIPLE CYTOKINE INFLUENCES
 ;      let pdgf-weight 100
 ;      let il6-weight 1
 ;      let north-pull ([pdgf-level] of patch-at 0 1) * pdgf-weight + ([il6-level] of patch-at 0 1) * il6-weight
@@ -307,7 +269,6 @@ to neutrophil-function
 ;          move-to strongest-pull-patch
 ;        ]
 ;      ]
-
 
       let p1 max-n-of 3 neighbors [pdgf-level]
       let p one-of p1 with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
@@ -349,12 +310,24 @@ to macrophage-function
     if time-in-cap > 1 [die]
     let cap one-of capillaries-here
     if not (cap = nobody) [
-      if random 100 < [permeability] of cap [
-        set location "wound-bed"        ;; represents vascular extravasation based off of vascular permeability
+      if random 100 < [permeability] of cap [   ;; converts permeability into the actual percent likelihood
+        let new-location one-of neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
+        if not (new-location = nobody) [ move-to new-location set location "wound-bed"]
       ]
     ]
     set time-in-cap time-in-cap + 1
   ]
+
+;  if location = "capillary" [
+;    if time-in-cap > 1 [die]
+;    let cap one-of capillaries-here
+;    if not (cap = nobody) [
+;      if random 100 < [permeability] of cap [
+;        set location "wound-bed"        ;; represents vascular extravasation based off of vascular permeability
+;      ]
+;    ]
+;    set time-in-cap time-in-cap + 1
+;  ]
 
   if location = "wound-bed" [
     if (ticks + tick-stagger) mod 10 = 0 [  ;; mac moves once every 2 hours
@@ -391,14 +364,14 @@ to macrophage-function
 end
 
 to basal-ktn-function
-  let hor-mitosis-il6-sensitivity 0.01      ;; adjusts how much il6 levels can impact mitosis rates
-  let vert-mitosis-il6-sensitivity 0.01
+  let base-vert-mitosis-rate 0.1
+  let base-hor-mitosis-rate 0
+
+  set hor-mitosis-rate min (list 0.05 (base-hor-mitosis-rate + il6-level * 0.02 + tnf-a-level * 0.001)) ; 0.05 used as max rate of division of ESC to be once every 20 hours ish. can lower to 0.01
+  set vert-mitosis-rate min (list 0.1 (base-vert-mitosis-rate + il6-level * 0.001 + tnf-a-level * 0.001))
+
 
   set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8) ;; changes color of basal cell based off of mitotic rate (whiter for higher rates)
-  if not (inert = true) [
-    set hor-mitosis-rate min (list 0.035 (base-hor-mitosis-rate + il6-level * 2 + tnf-a-level * 0.001)) ; 0.05 used as max rate of division of ESC to be once every 20 hours ish. can lower to 0.01
-    set vert-mitosis-rate (base-vert-mitosis-rate + il6-level * 0.01 + tnf-a-level * 0.01)
-  ]
 
   vert-mitosis vert-mitosis-rate
   hor-mitosis hor-mitosis-rate
@@ -425,9 +398,9 @@ end
 
 to fibroblast-function
   if injury-level > 50 [ set color 92]
-  set migration-rate min (list 0.5 (pdgf-level * 0.01 + tgf-b-level * 10 + fgf-level * 0.1 + il1-level * 0.1 + tnf-a-level * 0.1)) ;; migration rate is units moved in 1 hour, or 60 ticks
+  set migration-rate min (list 1 (pdgf-level * 0.01 + tgf-b-level * 10 + fgf-level * 0.1 + il1-level * 0.1 + tnf-a-level * 0.1)) ;; migration rate is units moved in 1 hour, or 60 ticks
   ;set ecm-production-rate pdgf-level * 0.05 + tgf-b-level * 100000000 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01    ;;production rate is units ecm made in 1 hour, or 60 ticks
-  set ecm-production-rate min (list 0.9 (pdgf-level * 0.05 + tgf-b-level * 10 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01))   ;;production rate is units ecm made in 1 hour, or 60 ticks
+  set ecm-production-rate min (list 0.5 (pdgf-level * 0.05 + tgf-b-level * 1 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01))   ;;production rate is units ecm made in 1 hour, or 60 ticks
 
   ;;below line is for testing
   ;set ecm-production-rate 10
@@ -440,24 +413,31 @@ to fibroblast-function
         let p1 max-n-of 3 neighbors [pdgf-level]
         let p one-of p1 with [any? ecms-here and not ((count fibroblasts in-radius 2) > 1 ) and not any? capillaries-here and not any? macrophages-here and not any? neutrophils-here]
 
+        let t1 max-n-of 3 neighbors [tgf-b-level]
+        let t one-of t1 with [any? ecms-here and not ((count fibroblasts in-radius 2) > 1 ) and not any? capillaries-here and not any? macrophages-here and not any? neutrophils-here]
+
 
         if not (p = nobody) and any? ecms-on p [
           let old-patch patch-here
-          if [pdgf-level] of p > pdgf-level [move-to p]
+          ifelse [pdgf-level] of p > pdgf-level [move-to p] [
+            if not (t = nobody) and any? ecms-on t [
+              if [tgf-b-level] of t > tgf-b-level [ move-to t]
+            ]
+          ]
           ;ask one-of ecms-on p [move-to old-patch]
         ]
       ]
     ]
 
     let curr-priority priority
-    if any? (neighbors with [not any? turtles-here with [priority < curr-priority]]) [
+   ; if any? (neighbors with [not any? turtles-here with [priority < curr-priority]]) [
 
       if not (ecm-production-rate = 0) [
         if (ticks mod (max (list 1 round (60 / ecm-production-rate)))) = 0 [
 
           let curr-x xcor
           let curr-y ycor
-          let random-neighbor one-of neighbors with [not any? turtles-here and pycor >= curr-y]
+          let random-neighbor one-of neighbors with [not any? turtles-here and pycor > curr-y]
           if random-neighbor = nobody [
             set random-neighbor one-of neighbors with [not any? basal-ktns-here and not any? turtles-here with [priority < curr-priority] and
               not any? platelets-here and not any? suprabasal-ktns-here and pycor > curr-y]
@@ -473,8 +453,9 @@ to fibroblast-function
 
             if not any? ecms-on random-neighbor [
               hatch-ecms 1 [set priority 0 set shape "square" set color gray move-to random-neighbor]
+
             ]
-          ]
+        ;  ]
         ]
       ]
     ]
@@ -517,7 +498,7 @@ to displace-randomly-ecm [prior-x prior-y]
   let random-neighbor one-of neighbors with [not any? turtles-here and
     ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))];pycor >= curr-y]
   if random-neighbor = nobody [
-    set random-neighbor one-of neighbors with [not any? turtles-here with [priority < curr-priority]  and not any? suprabasal-ktns-here and
+    set random-neighbor one-of neighbors with [not any? turtles-here with [priority < curr-priority] and
       ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))] ;and not any? platelets-here]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))]; neighbors with [any? platelets-here]
   ]
   if not (random-neighbor = nobody) [
@@ -525,6 +506,7 @@ to displace-randomly-ecm [prior-x prior-y]
       ask ecms-on random-neighbor [displace-randomly-ecm curr-x curr-y]
     ]
     if any? platelets-on random-neighbor [ ask platelets-on random-neighbor [die]]
+    if any? suprabasal-ktns-on random-neighbor [ ask suprabasal-ktns-on random-neighbor [die]]
     if not any? ecms-on random-neighbor [
       move-to random-neighbor
     ]
@@ -545,9 +527,10 @@ to vert-mitosis [ rate ]     ;; called by basal-ktns to create suprabasal-ktns
     ]
     if not (random-neighbor = nobody) [
       if any? turtles-on random-neighbor [
-        ask turtles-on random-neighbor [displace-randomly curr-x curr-y]
+        let recursion-depth 0
+        ask turtles-on random-neighbor [displace-randomly curr-x curr-y recursion-depth]
       ]
-
+      if any? platelets-on random-neighbor [ ask platelets-on random-neighbor [die]]
       if not any? turtles-on random-neighbor [
           hatch-suprabasal-ktns 1 [set priority 2 set shape "square" set color 34 + random-float 2 set tick-stagger (random 2880) move-to random-neighbor ]
       ]
@@ -555,10 +538,12 @@ to vert-mitosis [ rate ]     ;; called by basal-ktns to create suprabasal-ktns
   ]
 end
 
-to displace-randomly [ prior-x prior-y ]     ;; called by both vert-mitosis and hor-mitosis to displace cells in the way in a random but directional manner
+to displace-randomly [ prior-x prior-y recursion-depth]     ;; called by both vert-mitosis and hor-mitosis to displace cells in the way in a random but directional manner
   let curr-priority priority
   let curr-y ycor
   let curr-x xcor
+
+  let rec-depth recursion-depth + 1
 
   let dir-x (curr-x - prior-x)
   let dir-y (curr-y - prior-y)
@@ -596,8 +581,11 @@ to displace-randomly [ prior-x prior-y ]     ;; called by both vert-mitosis and 
   ]
   if not (random-neighbor = nobody) [
     if any? turtles-on random-neighbor [
-      ask turtles-on random-neighbor [displace-randomly curr-x curr-y]
+      if rec-depth < max-recursion-depth [
+        ask turtles-on random-neighbor [displace-randomly curr-x curr-y rec-depth]
+      ]
     ]
+    if any? platelets-on random-neighbor [ ask platelets-on random-neighbor [die]]
     if not any? turtles-on random-neighbor [
       move-to random-neighbor
     ]
@@ -619,9 +607,9 @@ to hor-mitosis [ rate ]     ;; called by basal-ktns to create new basal-ktns
     let displaced-neighbor nobody
     if not (possible = nobody) [
       if any? turtles-on possible [
-        if any? (turtles-on possible) with [priority > 1] [
-          ask turtles-on possible [ displace-randomly curr-x curr-y]
-        ]
+;        if any? (turtles-on possible) with [priority > 1] [
+;          ask turtles-on possible [ displace-randomly curr-x curr-y]
+;        ]
         if any? basal-ktns-on possible [
           set displaced-neighbor one-of basal-ktns-on possible
           let recursion-depth 0
@@ -631,7 +619,7 @@ to hor-mitosis [ rate ]     ;; called by basal-ktns to create new basal-ktns
       if any? ((turtles-on possible) with [priority > 1]) [ ask turtles-on possible [die]]
       if not any? turtles-on possible [
         hatch-basal-ktns 1 [
-          set priority -1 set shape "square" set hor-mitosis-rate base-hor-mitosis-rate set tick-stagger random 360 move-to possible
+          set priority -1 set shape "square" set tick-stagger random 360 move-to possible
         ]
       ]
     ]
@@ -655,10 +643,10 @@ to displace-horizontally [prior-x prior-y recursion-depth]     ;; recursive func
   ]
 
   if not (possible = nobody) [
-    if any? (turtles-on possible) with [priority > 1] [
-      ask turtles-on possible [ displace-randomly curr-x curr-y]
-    ]
-    if any? basal-ktns-on possible and rec-depth < 20[
+;    if any? (turtles-on possible) with [priority > 1] [
+;      ask turtles-on possible [ displace-randomly curr-x curr-y]
+;    ]
+    if any? basal-ktns-on possible and rec-depth < max-recursion-depth[
       ask turtles-on possible [ displace-horizontally curr-x curr-y rec-depth]
     ]
     if any? ((turtles-on possible) with [priority > 1])  [ ask turtles-on possible [ die]]
@@ -783,10 +771,10 @@ ticks
 30.0
 
 BUTTON
-101
-43
-165
-77
+82
+13
+146
+47
 NIL
 setup
 NIL
@@ -800,30 +788,13 @@ NIL
 1
 
 BUTTON
-184
-11
-328
-109
+250
+14
+343
+68
 go
 go
 T
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
-BUTTON
-13
-138
-82
-171
-NIL
-wound
-NIL
 1
 T
 OBSERVER
@@ -835,52 +806,52 @@ NIL
 
 CHOOSER
 10
-471
+218
 148
-516
+263
 visualize-cytokines
 visualize-cytokines
 "none" "egf" "pdgf" "il6" "il1" "txa2" "tnf-a" "fgf" "vegf" "tgf-b"
 0
 
 SWITCH
-8
-293
-130
-326
+10
+134
+132
+167
 epithelialization
 epithelialization
-0
-1
--1000
-
-SWITCH
-8
-334
-129
-367
-inflammation
-inflammation
 0
 1
 -1000
 
 SWITCH
 10
-239
-129
-272
-RandomRuns?
-RandomRuns?
+175
+131
+208
+inflammation
+inflammation
+0
 1
+-1000
+
+SWITCH
+13
+84
+132
+117
+RandomRuns?
+RandomRuns?
+0
 1
 -1000
 
 SLIDER
-154
-240
-326
-273
+157
+85
+329
+118
 RandomSeed
 RandomSeed
 0
@@ -892,10 +863,10 @@ NIL
 HORIZONTAL
 
 SWITCH
-10
-374
-128
-407
+163
+139
+281
+172
 proliferation
 proliferation
 0
@@ -903,10 +874,10 @@ proliferation
 -1000
 
 SWITCH
-9
-412
-128
-445
+162
+177
+281
+210
 angiogenesis
 angiogenesis
 0
@@ -932,10 +903,10 @@ PENS
 "pdgf" 1.0 0 -16777216 true "" "plot sum ([pdgf-level] of patches)"
 
 BUTTON
-98
-137
-161
-170
+157
+24
+220
+57
 NIL
 burn
 NIL
@@ -1004,10 +975,10 @@ PENS
 "macs" 1.0 0 -2674135 true "" "plot count macrophages with [location = \"wound-bed\"]"
 
 INPUTBOX
-24
-33
-83
-93
+11
+10
+70
+70
 unit-size
 20.0
 1
@@ -1069,10 +1040,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([tnf-a-level] of patches)"
 
 PLOT
-19
-526
-339
-710
+12
+486
+332
+670
 plot 2
 NIL
 NIL
@@ -1104,6 +1075,24 @@ false
 "" ""
 PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([txa2-level] of patches)"
+
+PLOT
+9
+275
+295
+458
+plot 4
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"# ecms" 1.0 0 -16777216 true "" "plot count ecms"
 
 @#$#@#$#@
 ## WHAT IS IT?
