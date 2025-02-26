@@ -8,20 +8,20 @@ breed [neutrophils neutrophil]
 breed [macrophages macrophage]
 breed [mast-cells mast-cell]
 
-;; Priority is used to determine which cells can displace other cells. Cells of higher priority (lower value) can displace cells of lower priority, but not vice-versa
-turtles-own [tick-stagger priority]
-suprabasal-ktns-own [ injury-level]
+
+turtles-own [tick-stagger priority] ;; 'priority' is used to determine which cells can displace other cells. Cells of higher priority (lower value) can displace cells of lower priority, but not vice-versa
+                                    ;; 'tick-stagger' adds stochasticity. staggers when agents perform actions
+suprabasal-ktns-own [ injury-counter]
 basal-ktns-own [ vert-mitosis-rate hor-mitosis-rate ] ;mitotic rate defined as 'rate' divisions per 100 ticks
-capillaries-own [ permeability blood-flow-rate ]
+capillaries-own [ permeability blood-flow-rate num-neuts-to-hatch num-macs-to-hatch]
 fibroblasts-own [ migration-rate ecm-production-rate injury-level]
-ecms-own []
 platelets-own [ time-alive]
 neutrophils-own [ time-in-cap location lifespan time-alive]
 macrophages-own [ time-in-cap location lifespan time-alive]
 
 patches-own [ patch-type egf-level pdgf-level il1-level fgf-level tnf-a-level il6-level vegf-level tgf-b-level bradykinin-level txa2-level]
 
-globals [ max-recursion-depth time-of-burn basal-layer-ycor rate-of-surface-abrasion]
+globals [ amt-ecm-burned amt-ecm-produced percent-ecm-reproduced reepithelialization-progress max-recursion-depth time-of-burn basal-layer-ycor]
 
 
 
@@ -30,56 +30,49 @@ to setup
   clear-all
   if RandomRuns? = false [random-seed RandomSeed]
 
-  ;set unit-size 15  ;; in microns. based off of 1 ESC, in that 1 ESC takes up 1 whole patch. so unit size of 20 means 1 patch is 20 microns and 1 ESC is 20 microns
-  resize-world 0 ((2000 / unit-size) - 1) 0 ((3000 / unit-size) - 1)
-  set-patch-size unit-size * 3 / 12
+  ;; Creates the world
+  set-patch-size unit-size * 3 / 12 ;; unit-size is an input in the interface and is in microns. it is the size of 1 patch. unit-size of 20 means 1 patch is 20microns x 20microns
+  resize-world 0 ((num-hair-follicles * 1000 / unit-size) - 1) 0 ((3000 / unit-size) - 1) ;;resizes the world based off of number of hair follicles and unit-size
+  set max-recursion-depth 20 ;; prevenst 'recursion too deep' errors
 
-  set max-recursion-depth 20
-
-  set rate-of-surface-abrasion 0.08 ;;'rate' abrasions per 60 ticks (per hour), equivalent to 1 time per 12 hours
-
+  ;; Sets up the basal layer
   set basal-layer-ycor round(max-pycor * 0.85)
   ask patches with [pycor = basal-layer-ycor] [
-    sprout-basal-ktns 1 [
-      set priority -1 set shape "square"
-      ;move-to one-of patches with [pycor = 350 and not any? other turtles-here]
-      set tick-stagger random 360  ;; tick-stagger used so not all basal cells mitose at the same exact time
-      set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)
-    ]
+    sprout-basal-ktns 1 [set priority -1 set shape "square" set tick-stagger random 360 set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)]
   ]
 
-  ask patches with [pycor > basal-layer-ycor and pycor < basal-layer-ycor + 10] [ sprout-suprabasal-ktns 1 [set priority 2 set shape "square"  set tick-stagger (random 2880) set color 34 + random-float 2]]
-  ;create-suprabasal-ktns 4500 [set priority 2 set shape "square" move-to one-of patches with [pycor > 350 and pycor < 358] with [not any? other turtles-here] set color 34 + random-float 2]
-  ;create-fibroblasts 200 [set migration-rate 0 set ecm-production-rate 0 set priority -2  set shape "square" set color 107 move-to one-of patches with [pycor < 129 ] with [not any? other fibroblasts in-radius 5] ]
-  ask patches with [pycor < basal-layer-ycor - 1] [if not (any? fibroblasts in-radius 5) and not any? turtles-here [
-    sprout-fibroblasts 1 [set migration-rate 0 set ecm-production-rate 0 set priority -2  set shape "square" set color 107]]]
-  ask patches with [pycor < basal-layer-ycor - 1] [if not (any? capillaries in-radius 8) and not any? turtles-here [
-    sprout-capillaries 1 [set tick-stagger random 360 set priority -2  set shape "circle" set color red
-  ]]]
+  ;;Sets up suprabasal keratinocytes
+  ask patches with [pycor > basal-layer-ycor and pycor < basal-layer-ycor + 10][sprout-suprabasal-ktns 1 [set priority 2 set shape "square"  set tick-stagger (random 2880) set color 34 + random-float 2]]
 
-  ask patches with [pycor < basal-layer-ycor] [ sprout-ecms 1 [set priority 0 set shape "square" set color 3]]
+  ;; Sets up fibroblasts
+  ask patches with [pycor < basal-layer-ycor - 1][if not (any? fibroblasts in-radius 5) and not any? turtles-here [sprout-fibroblasts 1 [set migration-rate 0 set ecm-production-rate 0 set priority -2  set shape "square" set color 107]]]
 
+  ;; Sets up capillaries
+  ask patches with [pycor < basal-layer-ycor - 1][if not (any? capillaries in-radius 8) and not any? turtles-here [sprout-capillaries 1 [set tick-stagger random 360 set priority -2  set shape "circle" set color red]]]
+
+  ;; Sets up the ECM
+  ask patches with [pycor < basal-layer-ycor][sprout-ecms 1 [set priority 0 set shape "square" set color 3]]
+
+  ;; Sets up the hair follicles
   create-hair-follicles
 
   reset-ticks
-
-  go ;; setup calls go once so that all the base turtle settings can be initialized by the respective turtle functions in go. necessary so base state of model can be seen just with setup alone
 end
 
+;; Creates the correct number of hair follicles
 to create-hair-follicles
-  let foll1-pos round (max-pxcor / 4)
-  let foll2-pos round (max-pxcor * 3 / 4)
+  foreach (range 0 num-hair-follicles) [
+    x -> let follicle-position round max-pxcor * 1 / (num-hair-follicles * 2) * (2 * x + 1)
 
-  ask turtles with [pxcor >= foll1-pos - 5 and pxcor < foll1-pos + 5 and pycor > 0.1 * max-pycor] [die]
-  ask turtles with [pxcor >= foll2-pos - 5 and pxcor < foll2-pos + 5 and pycor > 0.1 * max-pycor] [die]  ;; hair follicle thickness 10
-  ask turtles with [pxcor >= foll1-pos - 7 and pxcor < foll1-pos + 7 and pycor > 0.1 * max-pycor and pycor < 0.1 * max-pycor + 15] [die] ;; for the bulb
-  ask turtles with [pxcor >= foll2-pos - 7 and pxcor < foll2-pos + 7 and pycor > 0.1 * max-pycor and pycor < 0.1 * max-pycor + 15] [die] ;; for the bulb 2
-  ask ecms with [any? neighbors with [not any? turtles-here]] [ ask neighbors with [not any? turtles-here] [ sprout-basal-ktns 1 [
-    set priority -1 set shape "square"
-    set tick-stagger random 360  ;; tick-stagger used so not all basal cells mitose at the same exact time
-    set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)
-  ] ] ]
+    ask turtles with [pxcor >= follicle-position - 5 and pxcor < follicle-position + 5 and pycor > 0.1 * max-pycor] [die]
+    ask turtles with [pxcor >= follicle-position - 7 and pxcor < follicle-position + 7 and pycor > 0.1 * max-pycor and pycor < 0.1 * max-pycor + 15] [die] ;; for the bulb section, which is slightly wider
 
+    ask ecms with [any? neighbors with [not any? turtles-here]] [ ask neighbors with [not any? turtles-here] [ sprout-basal-ktns 1 [
+      set priority -1 set shape "square"
+      set tick-stagger random 360  ;; tick-stagger used so not all basal cells mitose at the same exact time
+      set color 61 + min (list (vert-mitosis-rate * 10 + hor-mitosis-rate * 10)  8)
+    ] ] ]
+  ]
 
   ask patches with [pycor < basal-layer-ycor + 10] [if (not any? turtles-here) [sprout-suprabasal-ktns 1[set priority 2 set shape "square"  set color 34 + random-float 2 set tick-stagger random 2880]]]
 end
@@ -90,87 +83,106 @@ to go
     ask suprabasal-ktns [suprabasal-ktn-function]
   ]
 
-  ask capillaries [capillary-function]
-  ask platelets [platelet-function]
-
-  if inflammation [   ;;inflammation/proliferation is a switch in the interface
-
-
-
-    ;ask platelet-patches [platelet-patch-function]
-    ask neutrophils [neutrophil-function]
-    ask macrophages [macrophage-function]
-  ]
-  if proliferation [
-    ask fibroblasts [fibroblast-function]
-  ]
-
-  if angiogenesis [
+  if vascular [ ;;vascular is a switch in the interface
+    ask capillaries [capillary-function]
+    ask platelets [platelet-function]
     undergo-angiogenesis
   ]
 
-  ;ask turtles [ if ycor > 399 [ die] ] ;;ensures no wrapping vertically and no null errors
-  ;ask turtles [ if ((xcor < 1)  or (xcor > 98)) [die]]
+  if inflammation [   ;;inflammation/proliferation is a switch in the interface
+    ask neutrophils [neutrophil-function]
+    ask macrophages [macrophage-function]
+  ]
+  if proliferation [ ;;proliferation is a switch in the interface
+    ask fibroblasts [fibroblast-function]
+  ]
 
-  ;abrade-surface-skin
   update-chemokine-gradient
+  check-reepithelialization-and-ecm-progress
 
-  if ticks = (1440 * 21) [ stop ]
+  if debridement [ ;;debridement is a switch in the interface
+    if ticks = 2880 or ticks = 5760 or ticks = 8640 [ debride ]    ;; debrides on day 2, 4, and 6
+  ]
+
+  if ticks = (1440 * num-days-to-simulate) [ stop ] ;;num-days-to-simulate is an input in the interface
 
   tick
-
-
 end
 
 
 to burn
-
+  let starting-amt-ecm count ecms
   ;if unit size is 15 (1 patch = 15 microns, then 1mm burn depth is 1000 / 15
   set time-of-burn ticks
-  let burn-depth round (1000 / unit-size) ;; creates a 1mm burn based off size of unit. depth is relative to most superficial keratinocyte layer
+  let burn-depth round (1000 / unit-size) ;; creates a 1mm burn based off size of unit. depth is relative to most superficial suprabasal keratinocyte layer
   let burn-bottom basal-layer-ycor + 10 - burn-depth
-  ;let burn-depth 50 ;; represents 50 patch depth, which is 1,000 microns, or 1mm burn depth. partial thickness
+
   ask turtles with [ycor > burn-bottom] [die]
-  ask patches with [pycor > burn-bottom and pycor < burn-bottom + round (0.3 * max-pycor)] [sprout-platelets 1 [ set color 13 set tick-stagger random 5760 set priority 3]]
-  ;ask patches with [pycor > burn-bottom and pycor < burn-bottom + round (0.2 * max-pycor)] [set platelet-time-remaining 7200 + random 2880 set pcolor 13]
-  ;set platelet-patches patches with [platelet-time-remaining > 0 ]
 
+  ask patches with [pycor > burn-bottom] [sprout-platelets 1 [ set color 13 set tick-stagger random 5760 set priority 3]]
 
+  ask suprabasal-ktns [ set injury-counter 10080 ] ;; injures the keratinocytes
 
   let zone-of-stasis-y-max burn-bottom
   let zone-of-stasis-y-min zone-of-stasis-y-max - max-pycor * 0.25
 
-  ask fibroblasts [ set injury-level (100 - (burn-bottom - ycor)) ]
-  ask suprabasal-ktns [ set injury-level (100 - (burn-bottom - ycor))]
+  ask fibroblasts [ set injury-level (100 - (burn-bottom - ycor)) ] ;; injures fibroblasts
 
   let zone-hyperemia-ymax zone-of-stasis-y-min
   let zone-hyperemia-ymin 0
+  set amt-ecm-burned starting-amt-ecm - (count ecms) ;; tracks how much ecm/dermis was destroyed
+end
+
+;; Debridement is implemented essentially as a small "burn" without destroying any tissue
+to debride
+  let x-range (range 0 (max-pxcor + 1))
+  foreach x-range [
+    ;; Kills only the platelet layer above the most superficial cell type
+    x -> let highest-permanent max-one-of (turtles with [xcor = x and priority <= 2]) [ycor]
+    let highest-perm-y ([ycor] of highest-permanent)
+    ask turtles with [xcor = x and ycor > highest-perm-y] [die]
+
+    ask patches with [not (any? turtles-here) and pxcor = x and pycor < highest-perm-y + 20] [sprout-platelets 1 [ set color 13 set tick-stagger random 5760 set priority 3]] ;;creates a smaller platelet plug
+  ]
+
+  ask suprabasal-ktns [ set injury-counter 7200 ] ;; lightly injures the keratinocytes
+end
+
+to check-reepithelialization-and-ecm-progress
+  if not (ticks = 0) and ticks mod 720 = 0 [              ;;check progress half day to improve run times
+    set reepithelialization-progress 0
+    let num-basalktns 0
+    let x-range (range 0 (max-pxcor + 1))
+    foreach x-range [
+      x ->  let basalktn-at-x one-of (basal-ktns with [xcor = x])
+
+      ifelse not (basalktn-at-x = nobody) [
+        set num-basalktns num-basalktns + 1
+      ] [
+        print basalktn-at-x
+      ]
+    ]
+    set reepithelialization-progress (num-basalktns / (max-pxcor + 1)) * 100
+  ]
+
+  if not (time-of-burn = 0) [
+    set percent-ecm-reproduced (amt-ecm-produced / amt-ecm-burned) * 100
+  ]
 end
 
 to undergo-angiogenesis
-
-  ;ticks + 10
-  ;if ticks mod 720 = 0 [ ;;this is just to slow down the process of angiogenesis, so can happen once every 12 hours
   ask patches with [any? ecms-here] [
-    ;let stoch-vegf random vegf-level
-      ;if any? ecms-here [
     let chance-of-angiogenesis 1 + random 100
-    if chance-of-angiogenesis < vegf-level and not (any? capillaries in-radius 8) and not (any? fibroblasts-here) [ ;;originally used in radius 5
+    if chance-of-angiogenesis < vegf-level and not (any? capillaries in-radius 8) and not (any? fibroblasts-here) [
       sprout-capillaries 1 [ set tick-stagger random 360 set priority -2  set shape "circle"]
-      ;ask ecms-here [die]
-      ]
-    ;]
-  ;]
+    ]
   ]
-
 end
 
 to capillary-function
-
   let base-cap-blood-flow-rate 1.2 ;; # of times inflam. cells can pass through per 60 ticks (per hour)
   let base-cap-permeability 1 ;;defined as % likelihood a cell can extravasate each tick
 
-  ;eventually implement blod flow rate below for zone of hyperemia
   set blood-flow-rate max (list 0 (base-cap-blood-flow-rate - txa2-level * 1000))
   set size max (list 0.5 blood-flow-rate ) ;; to visualize flow rate
 
@@ -179,15 +191,12 @@ to capillary-function
   set color 15 + (4 * permeability / 50)
 
 
-  let num-neuts-to-hatch 0 + min (list 6 round (pdgf-level  * 10000 )) + min (list 0.6 (il6-level * 100))  ; changes # of neutrophilic recruitment based off of pdgf-level
-  let num-macs-to-hatch 0 + min (list 1.5 round (pdgf-level * 10000 )) + min (list 0.15 (il6-level * 100)) ; changes # of macrophage recuritmnet based off of pdgf-level
+  set num-neuts-to-hatch 0 + min (list 6 round (pdgf-level  * 10000 )) + min (list 0.6 (il6-level * 1000))  ; chances # of neutrophilic recruitment based off of pdgf and il6 levels
+  set num-macs-to-hatch 0 + min (list 1.5 round (pdgf-level * 10000 )) + min (list 0.15 (il6-level * 1000)) ; chances # of macrophage recuritmnet based off of pdgf and il6 levels
 
   let net-rate-neuts blood-flow-rate * num-neuts-to-hatch
   let net-rate-macs blood-flow-rate * num-macs-to-hatch
 
-
-
-  ;;;ORIGINALLY NEUT MAC PRIORITY IS -2, but will try 0
   if net-rate-neuts > 0 [
     if ((ticks + tick-stagger) mod ceiling (60 / net-rate-neuts)) = 0  [
       hatch-neutrophils 1[set lifespan (7200 + random 500) set priority 0  set shape "star" set size 0.7 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
@@ -198,38 +207,18 @@ to capillary-function
       hatch-macrophages 1 [set lifespan (7200 + random 500) set priority 0 set shape "circle" set size 0.5 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
     ]
   ]
-
-  ;;blood-flow-rate defined as # of infl cells that pass through per 60 ticks (per hour). increased bfr allows for more frequent cell hatching in cap
-  ;if blood-flow-rate > 0 [
-   ; if ((ticks + tick-stagger) mod ceiling (60 / blood-flow-rate)) = 0 [
-     ;hatch-neutrophils num-neuts-to-hatch [set lifespan (26000 + random 500) set priority -2  set shape "star" set size 0.7 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
-     ;hatch-macrophages num-macs-to-hatch [set lifespan (26000 + random 500) set priority -2  set shape "circle" set size 0.5 set color yellow set time-in-cap 0 set location "capillary" set tick-stagger random 360]
- ;   ]
-  ;]
-  ;if ticks mod round(5000 / pdgf-level) = 0 [
-  ;hatch-macrophages 1 [set lifespan (1500 + random 500) set priority -2  set shape "triangle" set color yellow set time-in-cap 0 set location "capillary"]
-  ;]
-
-
 end
 
 to platelet-function
   set time-alive time-alive + 1
-  let pdgf-release-amt max (list 0 (500000 - (ticks + tick-stagger) * 80 ))
-  let txa2-release-amt max (list 0 (500000 - (ticks + tick-stagger) * 80 ))
+  let pdgf-release-amt max (list 0 (500000 - (time-alive + tick-stagger) * 80 ))
+  let txa2-release-amt max (list 0 (500000 - (time-alive + tick-stagger) * 80 ))
   set pdgf-level pdgf-level + pdgf-release-amt
   set txa2-level txa2-level + txa2-release-amt
 
   if pdgf-release-amt = 0 and txa2-release-amt = 0 [
-    set color 11
-    ;die
+    set color 11 ;; visual representation of inactive platelet
   ]
-
-
-  ;ifelse time-alive < 5760 + tick-stagger [  set pdgf-level pdgf-level + max (list 0 (500000 - ticks * 80 )) set txa2-level txa2-level + max (list 0 (500000 - ticks * 80 ))]   ;;platelets only degranulate/produce cytokines for 5-7 days
-   ; [ set color 11 ]
-  ;if time-alive < 7000 + tick-stagger [ set txa2-level txa2-level + max (list 0 (500 - ticks / 20))]
-  ;if time-alive < 5600 + tick-stagger [ set txa2-level txa2-level + max (list 0 (500 - ticks / 20))]
 end
 
 
@@ -251,43 +240,21 @@ to neutrophil-function
     set il6-level il6-level + 0.15
     if (ticks + tick-stagger) mod 10 = 0 [   ;; neutrophil moves every 2 hour
 
-      ;; TESTING DIFFERENT WAY OF CHEMOTACTIC MOVEMENT WITH MULTIPLE CYTOKINE INFLUENCES
-;      let pdgf-weight 100
-;      let il6-weight 1
-;      let north-pull ([pdgf-level] of patch-at 0 1) * pdgf-weight + ([il6-level] of patch-at 0 1) * il6-weight
-;      let northeast-pull ([pdgf-level] of patch-at 1 1) * pdgf-weight + ([il6-level] of patch-at 1 1) * il6-weight
-;      let northwest-pull ([pdgf-level] of patch-at -1 1) * pdgf-weight + ([il6-level] of patch-at -1 1) * il6-weight
-;
-;      let strongest-pull-patch patch-at 0 1
-;      if northeast-pull > north-pull [
-;        ifelse northwest-pull > northeast-pull [ set strongest-pull-patch patch-at -1 1]
-;        [set strongest-pull-patch patch-at 1 1]
-;      ]
-;
-;      if ([pdgf-level] of strongest-pull-patch) * pdgf-weight + ([il6-level] of strongest-pull-patch) * il6-weight > pdgf-level * pdgf-weight + il6-level * il6-weight [
-;        if any? ecms-on strongest-pull-patch and not any? neutrophils-on strongest-pull-patch and not any? macrophages-on strongest-pull-patch and not any? fibroblasts-on strongest-pull-patch and not any? capillaries-on strongest-pull-patch [
-;          move-to strongest-pull-patch
-;        ]
-;      ]
-
       let p1 max-n-of 3 neighbors [pdgf-level]
       let p one-of p1 with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
 
       let i1 max-n-of 3 neighbors [il6-level]
       let i one-of i1 with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
 
-      if not (p = nobody) [
+      ifelse not (p = nobody) [
         ifelse ([pdgf-level] of p > pdgf-level) and ([pycor] of p >= ycor) [
           move-to p
         ] [
-          if not (i = nobody) [
-            ifelse ([il6-level] of i > il6-level) and ([pycor] of p >= ycor) [
-              move-to i
-            ] [
-              move-to one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
-            ]
-          ]
+          move-to one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
         ]
+      ] [
+        let rando-neighbor one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
+        if not (rando-neighbor = nobody) [ move-to rando-neighbor]
       ]
     ]
 
@@ -305,6 +272,7 @@ to macrophage-function
   set vegf-level vegf-level + 10
   set tgf-b-level tgf-b-level + 10;100000
   set tnf-a-level tnf-a-level + 4
+  set egf-level egf-level + 10
 
   if location = "capillary" [
     if time-in-cap > 1 [die]
@@ -318,17 +286,6 @@ to macrophage-function
     set time-in-cap time-in-cap + 1
   ]
 
-;  if location = "capillary" [
-;    if time-in-cap > 1 [die]
-;    let cap one-of capillaries-here
-;    if not (cap = nobody) [
-;      if random 100 < [permeability] of cap [
-;        set location "wound-bed"        ;; represents vascular extravasation based off of vascular permeability
-;      ]
-;    ]
-;    set time-in-cap time-in-cap + 1
-;  ]
-
   if location = "wound-bed" [
     if (ticks + tick-stagger) mod 10 = 0 [  ;; mac moves once every 2 hours
 
@@ -338,18 +295,15 @@ to macrophage-function
       let i1 max-n-of 3 neighbors [il6-level]
       let i one-of i1 with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here]
 
-      if not (p = nobody) [
+      ifelse not (p = nobody) [
         ifelse ([pdgf-level] of p > pdgf-level) and ([pycor] of p >= ycor) [
           move-to p
         ] [
-          if not (i = nobody) [
-            ifelse ([il6-level] of i > il6-level) and ([pycor] of p >= ycor) [
-              move-to i
-            ] [
-              move-to one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
-            ]
-          ]
+          move-to one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
         ]
+      ] [
+        let rando-neighbor one-of (neighbors with [any? ecms-here and not any? fibroblasts-here and not any? neutrophils-here and not any? macrophages-here and not any? capillaries-here])
+        if not (rando-neighbor = nobody) [ move-to rando-neighbor]
       ]
     ]
     if ticks mod 120 = 0 and (random 100) < 100 [     ;;mac has 25% chance of phagocytosing nearby debris (in this case, platelet particles) every hour
@@ -367,7 +321,7 @@ to basal-ktn-function
   let base-vert-mitosis-rate 0.1
   let base-hor-mitosis-rate 0
 
-  set hor-mitosis-rate min (list 0.05 (base-hor-mitosis-rate + il6-level * 0.02 + tnf-a-level * 0.001)) ; 0.05 used as max rate of division of ESC to be once every 20 hours ish. can lower to 0.01
+  set hor-mitosis-rate min (list 0.06 (base-hor-mitosis-rate + il6-level * 0.02 + egf-level * 1 + tnf-a-level * 0.001)) ; 0.05 used as max rate of division of ESC to be once every 20 hours ish. can lower to 0.01
   set vert-mitosis-rate min (list 0.1 (base-vert-mitosis-rate + il6-level * 0.001 + tnf-a-level * 0.001))
 
 
@@ -380,8 +334,8 @@ end
 to suprabasal-ktn-function
 ;  if injury-level < 50 and injury-level > 0  [
   ;if injury-level > 0  [
-  if ticks - time-of-burn + tick-stagger < 10080 [
-    set egf-level egf-level + 10
+  if injury-counter > 0 + tick-stagger [
+    set egf-level egf-level + 0.5
     set tnf-a-level tnf-a-level + 1
     set il6-level il6-level + 0.5
 
@@ -389,26 +343,19 @@ to suprabasal-ktn-function
     set fgf-level fgf-level + 1
 
     set vegf-level vegf-level + 0.3
-    ;if ticks mod 200 = 0 [ set injury-level injury-level - 1] ;;healing with time, calibrated to heal to injury level < 50 within 7 days, or 10,080 ticks
+    set injury-counter injury-counter - 1
   ]
-
-
 
 end
 
 to fibroblast-function
-  if injury-level > 50 [ set color 92]
-  set migration-rate min (list 1 (pdgf-level * 0.01 + tgf-b-level * 10 + fgf-level * 0.1 + il1-level * 0.1 + tnf-a-level * 0.1)) ;; migration rate is units moved in 1 hour, or 60 ticks
-  ;set ecm-production-rate pdgf-level * 0.05 + tgf-b-level * 100000000 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01    ;;production rate is units ecm made in 1 hour, or 60 ticks
-  set ecm-production-rate min (list 0.5 (pdgf-level * 0.05 + tgf-b-level * 1 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01))   ;;production rate is units ecm made in 1 hour, or 60 ticks
+  if injury-level > 60 [ set color 92]
+  set migration-rate min (list 0.8 (pdgf-level * 0.01 + tgf-b-level * 10 + fgf-level * 0.1 + il1-level * 0.1 + tnf-a-level * 0.1)) ;; migration rate is units moved in 1 hour, or 60 ticks
+  set ecm-production-rate min (list 1.4 (pdgf-level * 1000 + tgf-b-level * 0.02 + fgf-level * 0.01 + il1-level * 0.01 + tnf-a-level * 0.01))   ;;production rate is units ecm made in 1 hour, or 60 ticks
 
-  ;;below line is for testing
-  ;set ecm-production-rate 10
-  if not (injury-level > 50) [
+  if not (injury-level > 60) [
     if not (migration-rate = 0) [ ;;prevent divide by 0 error
       if (ticks mod (max (list 1 round (60 / migration-rate)))) = 0 [
-        ;let p1 neighbors with [any? ecms-here and not ((count fibroblasts in-radius 2) > 1 ) and not (any? neutrophils-here or any? macrophages-here or any? capillaries-here)]
-        ;let p max-one-of p1 [pdgf-level]
 
         let p1 max-n-of 3 neighbors [pdgf-level]
         let p one-of p1 with [any? ecms-here and not ((count fibroblasts in-radius 2) > 1 ) and not any? capillaries-here and not any? macrophages-here and not any? neutrophils-here]
@@ -424,28 +371,24 @@ to fibroblast-function
               if [tgf-b-level] of t > tgf-b-level [ move-to t]
             ]
           ]
-          ;ask one-of ecms-on p [move-to old-patch]
         ]
       ]
     ]
 
     let curr-priority priority
-   ; if any? (neighbors with [not any? turtles-here with [priority < curr-priority]]) [
 
-      if not (ecm-production-rate = 0) [
-        if (ticks mod (max (list 1 round (60 / ecm-production-rate)))) = 0 [
+    if not (ecm-production-rate = 0) [
+      if (ticks mod (max (list 1 round (60 / ecm-production-rate)))) = 0 [
 
-          let curr-x xcor
-          let curr-y ycor
-          let random-neighbor one-of neighbors with [not any? turtles-here and pycor > curr-y]
-          if random-neighbor = nobody [
-            set random-neighbor one-of neighbors with [not any? basal-ktns-here and not any? turtles-here with [priority < curr-priority] and
-              not any? platelets-here and not any? suprabasal-ktns-here and pycor > curr-y]
-          ]
+        let curr-x xcor
+        let curr-y ycor
+        let random-neighbor one-of neighbors with [not any? turtles-here]
+        if random-neighbor = nobody [
+          set random-neighbor one-of neighbors with [not any? basal-ktns-here and not any? turtles-here with [priority < curr-priority] and
+            not any? platelets-here and not any? suprabasal-ktns-here]
+
           ;; so fibroblasts produce only upwards
           if not (random-neighbor = nobody) [
-
-            ;if ycor < 49 and any? ecms-on random-neighbor [
             if any? ecms-on random-neighbor [
 
               ask ecms-on random-neighbor [displace-randomly-ecm curr-x curr-y]
@@ -453,9 +396,9 @@ to fibroblast-function
 
             if not any? ecms-on random-neighbor [
               hatch-ecms 1 [set priority 0 set shape "square" set color gray move-to random-neighbor]
-
+              set amt-ecm-produced amt-ecm-produced + 1
             ]
-        ;  ]
+          ]
         ]
       ]
     ]
@@ -478,28 +421,19 @@ to displace-randomly-ecm [prior-x prior-y]
   let new-a-3 dir-angle + 45
   let new-a-4 dir-angle + 90
 
-  ;let n0x round (cos new-a-0) + curr-x
-  ;let n0y round (sin new-a-0) + curr-y
   let n1x round (cos new-a-1) + curr-x
   let n1y round (sin new-a-1) + curr-y
   let n2x round (cos new-a-2) + curr-x
   let n2y round (sin new-a-2) + curr-y
   let n3x round (cos new-a-3) + curr-x
   let n3y round (sin new-a-3) + curr-y
-  ;let n4x round (cos new-a-4) + curr-x
-  ;let n4y round (sin new-a-4) + curr-y
 
-  ;; below 4 lines to be used when only 3 directions of possilbe displacement are wanted. this essentially elimnates the 90 degree angle directions from being options
-  ;let n0x 1000
-  ;let n0y 1000
-  ;let n4x 1000
-  ;let n4y 1000
 
   let random-neighbor one-of neighbors with [not any? turtles-here and
-    ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))];pycor >= curr-y]
+    ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]
   if random-neighbor = nobody [
     set random-neighbor one-of neighbors with [not any? turtles-here with [priority < curr-priority] and
-      ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))] ;and not any? platelets-here]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))]; neighbors with [any? platelets-here]
+      ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]
   ]
   if not (random-neighbor = nobody) [
     if any? ecms-on random-neighbor [
@@ -556,28 +490,19 @@ to displace-randomly [ prior-x prior-y recursion-depth]     ;; called by both ve
   let new-a-3 dir-angle + 45
   let new-a-4 dir-angle + 90
 
-  ;let n0x round (cos new-a-0) + curr-x
-  ;let n0y round (sin new-a-0) + curr-y
+
   let n1x round (cos new-a-1) + curr-x
   let n1y round (sin new-a-1) + curr-y
   let n2x round (cos new-a-2) + curr-x
   let n2y round (sin new-a-2) + curr-y
   let n3x round (cos new-a-3) + curr-x
   let n3y round (sin new-a-3) + curr-y
-  ;let n4x round (cos new-a-4) + curr-x
-  ;let n4y round (sin new-a-4) + curr-y
-
-  ;; below 4 lines to be used when only 3 directions of possilbe displacement are wanted. this essentially elimnates the 90 degree angle directions from being options
-  ;let n0x 1000
-  ;let n0y 1000
-  ;let n4x 1000
-  ;let n4y 1000
 
   let random-neighbor one-of neighbors with [not any? turtles-here and
-    ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))];pycor >= curr-y]
+    ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]
   if random-neighbor = nobody [
     set random-neighbor one-of neighbors with [not any? turtles-here with [priority < curr-priority] and
-        ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]; or (pxcor = n4x and pycor = n4y) or (pxcor = n0x and pycor = n0y))]; neighbors with [any? platelets-here]
+        ((pxcor = n1x and pycor = n1y) or (pxcor = n2x and pycor = n2y) or (pxcor = n3x and pycor = n3y))]
   ]
   if not (random-neighbor = nobody) [
     if any? turtles-on random-neighbor [
@@ -607,9 +532,6 @@ to hor-mitosis [ rate ]     ;; called by basal-ktns to create new basal-ktns
     let displaced-neighbor nobody
     if not (possible = nobody) [
       if any? turtles-on possible [
-;        if any? (turtles-on possible) with [priority > 1] [
-;          ask turtles-on possible [ displace-randomly curr-x curr-y]
-;        ]
         if any? basal-ktns-on possible [
           set displaced-neighbor one-of basal-ktns-on possible
           let recursion-depth 0
@@ -633,19 +555,12 @@ to displace-horizontally [prior-x prior-y recursion-depth]     ;; recursive func
   let curr-x xcor
 
   let possible one-of neighbors4 with [not any? turtles-here and (any? ecms-on neighbors or any? capillaries-on neighbors or any? fibroblasts-on neighbors) and not (pxcor = prior-x and pycor = prior-y)]
-  ;if possible = nobody [
-  ;  set possible one-of neighbors4 with [not any? turtles-here with [priority <= 0] and any? (turtles-on neighbors) with [priority <= 0] and not (pxcor = prior-x and pycor = prior-y)]
-  ;]
 
-  ;;below line is test
   if possible = nobody [
     set possible one-of neighbors4 with [not any? turtles-here with [priority <= -2] and not any? ecms-here and (any? ecms-on neighbors or any? capillaries-on neighbors or any? fibroblasts-on neighbors) and not (pxcor = prior-x and pycor = prior-y)]
   ]
 
   if not (possible = nobody) [
-;    if any? (turtles-on possible) with [priority > 1] [
-;      ask turtles-on possible [ displace-randomly curr-x curr-y]
-;    ]
     if any? basal-ktns-on possible and rec-depth < max-recursion-depth[
       ask turtles-on possible [ displace-horizontally curr-x curr-y rec-depth]
     ]
@@ -655,7 +570,6 @@ to displace-horizontally [prior-x prior-y recursion-depth]     ;; recursive func
 
     ]
   ]
-
 end
 
 
@@ -679,7 +593,6 @@ to update-chemokine-gradient
       set pdgf-level 0 set il6-level 0 set il1-level 0 set tnf-a-level 0
       set fgf-level 0 set vegf-level 0 set tgf-b-level 0 set txa2-level 0
     ]
-
 
     set egf-level egf-level * 0.95
     set pdgf-level pdgf-level * 0.95
@@ -724,29 +637,11 @@ to update-chemokine-gradient
     ]
   ]
 end
-
-to abrade-surface-skin     ;;removes the most surface-level keratinocyte (suprabasal) to simulate physiologic skin sloughing
-  if not (rate-of-surface-abrasion = 0) [
-    if ticks mod (round (100 / rate-of-surface-abrasion)) = 0 [
-      let x-range (range 0 180)
-      foreach x-range [
-        ;x ->  let suprabasal-ktns-at-x suprabasal-ktns with [xcor = x]
-        ;ask suprabasal-ktns-at-x with-max [ycor] [die]
-
-        x ->  let turtles-at-x turtles with [xcor = x]
-        let single one-of turtles-at-x with-max [ycor]
-        if not (single = nobody) [
-          if ([priority] of single) > 1 [ ask single [die ]]
-        ]
-      ]
-    ]
-  ]
-end
 @#$#@#$#@
 GRAPHICS-WINDOW
-348
+468
 10
-856
+976
 769
 -1
 -1
@@ -771,10 +666,10 @@ ticks
 30.0
 
 BUTTON
-82
+270
 13
-146
-47
+325
+70
 NIL
 setup
 NIL
@@ -788,10 +683,10 @@ NIL
 1
 
 BUTTON
-250
+385
 14
-343
-68
+440
+70
 go
 go
 T
@@ -805,20 +700,20 @@ NIL
 1
 
 CHOOSER
-10
-218
-148
-263
+296
+163
+443
+208
 visualize-cytokines
 visualize-cytokines
 "none" "egf" "pdgf" "il6" "il1" "txa2" "tnf-a" "fgf" "vegf" "tgf-b"
 0
 
 SWITCH
-10
-134
-132
-167
+12
+126
+127
+159
 epithelialization
 epithelialization
 0
@@ -826,47 +721,47 @@ epithelialization
 -1000
 
 SWITCH
-10
-175
+141
+127
+264
+160
+inflammation
+inflammation
+0
+1
+-1000
+
+SWITCH
+12
+81
 131
-208
-inflammation
-inflammation
-0
+114
+RandomRuns?
+RandomRuns?
 1
--1000
-
-SWITCH
-13
-84
-132
-117
-RandomRuns?
-RandomRuns?
-0
 1
 -1000
 
 SLIDER
-157
-85
-329
-118
+140
+81
+442
+114
 RandomSeed
 RandomSeed
 0
 1000
-310.0
+420.0
 1
 1
 NIL
 HORIZONTAL
 
 SWITCH
-163
-139
-281
-172
+12
+168
+127
+201
 proliferation
 proliferation
 0
@@ -874,22 +769,22 @@ proliferation
 -1000
 
 SWITCH
-162
-177
-281
-210
-angiogenesis
-angiogenesis
+143
+166
+265
+199
+vascular
+vascular
 0
 1
 -1000
 
 PLOT
-1109
-11
-1309
-161
-plot 1
+13
+549
+238
+699
+Platelet-derived Cytokines
 NIL
 NIL
 0.0
@@ -901,12 +796,13 @@ true
 "" ""
 PENS
 "pdgf" 1.0 0 -16777216 true "" "plot sum ([pdgf-level] of patches)"
+"txa2" 1.0 0 -2674135 true "" "plot sum ([txa2-level] of patches)"
 
 BUTTON
-157
-24
-220
-57
+328
+14
+383
+70
 NIL
 burn
 NIL
@@ -920,10 +816,10 @@ NIL
 1
 
 PLOT
-878
-14
-1078
-164
+245
+550
+445
+700
 EGF
 NIL
 NIL
@@ -938,10 +834,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([egf-level] of patches)"
 
 PLOT
-878
-164
-1078
-314
+15
+708
+227
+858
 IL6
 NIL
 NIL
@@ -956,11 +852,11 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([il6-level] of patches)"
 
 PLOT
-871
-483
-1289
-666
-Neuts and Macs
+12
+214
+444
+397
+Neutrophil and Macrophage Counts
 ticks
 NIL
 0.0
@@ -971,13 +867,13 @@ true
 true
 "" ""
 PENS
-"neuts" 1.0 0 -16777216 true "" "plot count neutrophils with [location = \"wound-bed\"]"
-"macs" 1.0 0 -2674135 true "" "plot count macrophages with [location = \"wound-bed\"]"
+"neutrophils" 1.0 0 -2674135 true "" "plot count neutrophils with [location = \"wound-bed\"]"
+"macrophages" 1.0 0 -10899396 true "" "plot count macrophages with [location = \"wound-bed\"]"
 
 INPUTBOX
 11
 10
-70
+61
 70
 unit-size
 20.0
@@ -986,10 +882,10 @@ unit-size
 Number
 
 PLOT
-1110
-324
-1310
-474
+238
+865
+445
+1015
 VEGF
 NIL
 NIL
@@ -1004,10 +900,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([vegf-level] of patches)"
 
 PLOT
-879
-320
-1079
-470
+16
+865
+226
+1015
 TGFb
 NIL
 NIL
@@ -1022,10 +918,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([tgf-b-level] of patches)"
 
 PLOT
-1109
-167
-1309
-317
+238
+708
+445
+858
 TNFa
 NIL
 NIL
@@ -1039,60 +935,56 @@ false
 PENS
 "default" 1.0 0 -16777216 true "" "plot sum ([tnf-a-level] of patches)"
 
-PLOT
+INPUTBOX
+64
+11
+155
+71
+num-hair-follicles
+2.0
+1
+0
+Number
+
+SWITCH
+295
+125
+443
+158
+debridement
+debridement
+0
+1
+-1000
+
+INPUTBOX
+157
 12
-486
-332
-670
-plot 2
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-true
-"" ""
-PENS
-"num capillaries" 1.0 0 -16777216 true "" "plot count capillaries"
-"cap blood flow rate" 1.0 0 -14454117 true "" "plot sum [blood-flow-rate] of capillaries"
+268
+72
+num-days-to-simulate
+21.0
+1
+0
+Number
 
 PLOT
-1307
-127
-1507
-277
-plot 3
+12
+404
+444
+543
+Re-epithelialization Progress (%)
 NIL
 NIL
 0.0
 10.0
 0.0
-10.0
+100.0
 true
 false
 "" ""
 PENS
-"default" 1.0 0 -16777216 true "" "plot sum ([txa2-level] of patches)"
-
-PLOT
-9
-275
-295
-458
-plot 4
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-true
-"" ""
-PENS
-"# ecms" 1.0 0 -16777216 true "" "plot count ecms"
+"default" 1.0 0 -16777216 true "" "plot reepithelialization-progress"
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1436,16 +1328,31 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.2.2
+NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
 <experiments>
   <experiment name="experiment" repetitions="1" runMetricsEveryStep="true">
-    <setup>setup</setup>
+    <setup>setup
+burn</setup>
     <go>go</go>
-    <metric>count turtles</metric>
-    <steppedValueSet variable="RandomSeed" first="310" step="2" last="320"/>
+    <metric>reepithelialization-progress</metric>
+    <metric>percent-ecm-reproduced</metric>
+    <metric>sum ([egf-level] of patches)</metric>
+    <metric>sum ([il6-level] of patches)</metric>
+    <metric>sum ([tnf-a-level] of patches)</metric>
+    <metric>sum ([tgf-b-level] of patches)</metric>
+    <metric>sum ([vegf-level] of patches)</metric>
+    <metric>count neutrophils with [location = "wound-bed"]</metric>
+    <metric>count macrophages with [location = "wound-bed"]</metric>
+    <metric>sum ([hor-mitosis-rate] of basal-ktns)</metric>
+    <metric>sum ([ecm-production-rate] of fibroblasts)</metric>
+    <metric>count capillaries</metric>
+    <steppedValueSet variable="RandomSeed" first="100" step="50" last="550"/>
+    <enumeratedValueSet variable="num-hair-follicles">
+      <value value="2"/>
+    </enumeratedValueSet>
     <enumeratedValueSet variable="unit-size">
       <value value="20"/>
     </enumeratedValueSet>
@@ -1455,7 +1362,7 @@ NetLogo 6.2.2
     <enumeratedValueSet variable="visualize-cytokines">
       <value value="&quot;none&quot;"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="angiogenesis">
+    <enumeratedValueSet variable="vascular">
       <value value="true"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="epithelialization">
@@ -1464,6 +1371,48 @@ NetLogo 6.2.2
     <enumeratedValueSet variable="inflammation">
       <value value="true"/>
     </enumeratedValueSet>
+    <enumeratedValueSet variable="proliferation">
+      <value value="true"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="test of modularity" repetitions="1" runMetricsEveryStep="true">
+    <setup>setup
+burn</setup>
+    <go>go</go>
+    <metric>reepithelialization-progress</metric>
+    <metric>percent-ecm-reproduced</metric>
+    <metric>sum ([egf-level] of patches)</metric>
+    <metric>sum ([il6-level] of patches)</metric>
+    <metric>sum ([tnf-a-level] of patches)</metric>
+    <metric>sum ([tgf-b-level] of patches)</metric>
+    <metric>sum ([vegf-level] of patches)</metric>
+    <metric>count neutrophils with [location = "wound-bed"]</metric>
+    <metric>count macrophages with [location = "wound-bed"]</metric>
+    <metric>sum ([hor-mitosis-rate] of basal-ktns)</metric>
+    <metric>sum ([ecm-production-rate] of fibroblasts)</metric>
+    <metric>count capillaries</metric>
+    <enumeratedValueSet variable="RandomSeed">
+      <value value="682"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="unit-size">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="RandomRuns?">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="visualize-cytokines">
+      <value value="&quot;none&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="vascular">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="epithelialization">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="inflammation">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="num-hair-follicles" first="2" step="2" last="4"/>
     <enumeratedValueSet variable="proliferation">
       <value value="true"/>
     </enumeratedValueSet>
